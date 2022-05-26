@@ -346,7 +346,8 @@ def get_auth(args, encode=True, for_git_cli=False):
                 token = token.decode('utf-8')
                 auth = token + ':' + 'x-oauth-basic'
             except subprocess.SubprocessError:
-                raise Exception('No password item matching the provided name and account could be found in the osx keychain.')
+                raise Exception(
+                    'No password item matching the provided name and account could be found in the osx keychain.')
     elif args.osx_keychain_item_account:
         raise Exception('You must specify both name and account fields for osx keychain password items')
     elif args.token:
@@ -533,12 +534,12 @@ def _get_response(request, auth, template):
             r = exc
         except URLError as e:
             log_warning(e.reason)
-            should_continue = _request_url_error(template, retry_timeout)
+            should_continue, retry_timeout = _request_url_error(template, retry_timeout)
             if not should_continue:
                 raise
         except socket.error as e:
             log_warning(e.strerror)
-            should_continue = _request_url_error(template, retry_timeout)
+            should_continue, retry_timeout = _request_url_error(template, retry_timeout)
             if not should_continue:
                 raise
 
@@ -551,9 +552,9 @@ def _get_response(request, auth, template):
 
 def _construct_request(per_page, page, query_args, template, auth, as_app=None):
     querystring = urlencode(dict(list({
-        'per_page': per_page,
-        'page': page
-    }.items()) + list(query_args.items())))
+                                          'per_page': per_page,
+                                          'page': page
+                                      }.items()) + list(query_args.items())))
 
     request = Request(template + '?' + querystring)
     if auth is not None:
@@ -598,16 +599,15 @@ def _request_http_error(exc, auth, errors):
 
 
 def _request_url_error(template, retry_timeout):
-    # Incase of a connection timing out, we can retry a few time
+    # In case of a connection timing out, we can retry a few time
     # But we won't crash and not back-up the rest now
     log_info('{} timed out'.format(template))
     retry_timeout -= 1
 
     if retry_timeout >= 0:
-        return True
+        return True, retry_timeout
 
     raise Exception('{} timed out to much, skipping!')
-    return False
 
 
 class S3HTTPRedirectHandler(HTTPRedirectHandler):
@@ -617,6 +617,7 @@ class S3HTTPRedirectHandler(HTTPRedirectHandler):
     urllib will add the Authorization header to the redirected request to S3, which will result in a 400,
     so we should remove said header on redirect.
     """
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         request = super(S3HTTPRedirectHandler, self).redirect_request(req, fp, code, msg, headers, newurl)
         del request.headers['Authorization']
@@ -664,7 +665,8 @@ def get_authenticated_user(args):
 def check_git_lfs_install():
     exit_code = subprocess.call(['git', 'lfs', 'version'])
     if exit_code != 0:
-        raise Exception('The argument --lfs requires you to have Git LFS installed.\nYou can get it from https://git-lfs.github.com.')
+        raise Exception(
+            'The argument --lfs requires you to have Git LFS installed.\nYou can get it from https://git-lfs.github.com.')
 
 
 def retrieve_repositories(args, authenticated_user):
@@ -676,7 +678,8 @@ def retrieve_repositories(args, authenticated_user):
             get_github_api_host(args))
     else:
         if args.private and not args.organization:
-            log_warning('Authenticated user is different from user being backed up, thus private repositories cannot be accessed')
+            log_warning(
+                'Authenticated user is different from user being backed up, thus private repositories cannot be accessed')
         template = 'https://{0}/users/{1}/repos'.format(
             get_github_api_host(args),
             args.user)
@@ -756,10 +759,11 @@ def filter_repositories(args, unfiltered_repositories):
 
 def backup_repositories(args, output_directory, repositories):
     log_info('Backing up repositories')
+    number_of_errors = 0
     repos_template = 'https://{0}/repos'.format(get_github_api_host(args))
-
     if args.incremental:
-        last_update = max(list(repository['updated_at'] for repository in repositories) or [time.strftime('%Y-%m-%dT%H:%M:%SZ', time.localtime())])  # noqa
+        last_update = max(list(repository['updated_at'] for repository in repositories) or [
+            time.strftime('%Y-%m-%dT%H:%M:%SZ', time.localtime())])  # noqa
         last_update_path = os.path.join(output_directory, 'last_update')
         if os.path.exists(last_update_path):
             args.since = open(last_update_path).read().strip()
@@ -785,12 +789,15 @@ def backup_repositories(args, output_directory, repositories):
         if (args.include_repository or args.include_everything) \
                 or (include_gists and repository.get('is_gist')):
             repo_name = repository.get('name') if not repository.get('is_gist') else repository.get('id')
-            fetch_repository(repo_name,
-                             repo_url,
-                             repo_dir,
-                             skip_existing=args.skip_existing,
-                             bare_clone=args.bare_clone,
-                             lfs_clone=args.lfs_clone)
+            rc = fetch_repository(repo_name,
+                                  repo_url,
+                                  repo_dir,
+                                  skip_existing=args.skip_existing,
+                                  bare_clone=args.bare_clone,
+                                  lfs_clone=args.lfs_clone)
+            # increment error counter
+            if rc != 0:
+                number_of_errors += 1
 
             if repository.get('is_gist'):
                 # dump gist information to a file as well
@@ -802,13 +809,14 @@ def backup_repositories(args, output_directory, repositories):
 
         download_wiki = (args.include_wiki or args.include_everything)
         if repository['has_wiki'] and download_wiki:
-            fetch_repository(repository['name'],
+            rc = fetch_repository(repository['name'],
                              repo_url.replace('.git', '.wiki.git'),
                              os.path.join(repo_cwd, 'wiki'),
                              skip_existing=args.skip_existing,
                              bare_clone=args.bare_clone,
                              lfs_clone=args.lfs_clone)
-
+            if rc != 0:
+                number_of_errors += 1
         if args.include_issues or args.include_everything:
             backup_issues(args, repo_cwd, repository, repos_template)
 
@@ -830,6 +838,8 @@ def backup_repositories(args, output_directory, repositories):
 
     if args.incremental:
         open(last_update_path, 'w').write(last_update)
+
+    return number_of_errors
 
 
 def backup_issues(args, repo_cwd, repository, repos_template):
@@ -1098,8 +1108,8 @@ def fetch_repository(name,
         if lfs_clone:
             git_command = ['git', 'lfs', 'fetch', '--all', '--prune']
         else:
-            git_command = ['git', 'fetch', '--all', '--force', '--tags', '--prune']
-        logging_subprocess(git_command, None, cwd=local_dir)
+            git_command = ['git', 'fetc', '--all', '--force', '--tags', '--prune']
+        rc = logging_subprocess(git_command, None, cwd=local_dir)
     else:
         log_info('Cloning {0} repository from {1} to {2}'.format(
             name,
@@ -1107,16 +1117,18 @@ def fetch_repository(name,
             local_dir))
         if bare_clone:
             git_command = ['git', 'clone', '--mirror', remote_url, local_dir]
-            logging_subprocess(git_command, None)
+            rc = logging_subprocess(git_command, None)
             if lfs_clone:
                 git_command = ['git', 'lfs', 'fetch', '--all', '--prune']
-                logging_subprocess(git_command, None, cwd=local_dir)
+                rc = logging_subprocess(git_command, None, cwd=local_dir)
         else:
             if lfs_clone:
                 git_command = ['git', 'lfs', 'clone', remote_url, local_dir]
             else:
                 git_command = ['git', 'clone', remote_url, local_dir]
-            logging_subprocess(git_command, None)
+            rc = logging_subprocess(git_command, None)
+
+    return rc
 
 
 def backup_account(args, output_directory):

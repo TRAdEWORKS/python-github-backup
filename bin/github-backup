@@ -21,6 +21,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+
 def main():
     args = parse_args()
 
@@ -37,11 +38,12 @@ def main():
         authenticated_user = get_authenticated_user(args)
     else:
         authenticated_user = {'login': None}
-
     repositories = retrieve_repositories(args, authenticated_user)
     repositories = filter_repositories(args, repositories)
-    backup_repositories(args, output_directory, repositories)
+    number_of_errors = backup_repositories(args, output_directory, repositories)
     backup_account(args, output_directory)
+    if number_of_errors > 0:
+        raise Exception('Backup repositories finished with {} errors'.format(number_of_errors))
 
 
 if __name__ == '__main__':
